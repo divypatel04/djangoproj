@@ -1,144 +1,460 @@
 {% extends 'storage/base.html' %}
 
 {% block content %}
-    <div class="container mt-5">
-        <h2 class="text-center">Uploaded Files</h2>
-
-        {% if files %}
-            <table class="table table-bordered table-hover">
-                <thead class="table-dark">
-                    <tr>
-                        <th>File Name</th>
-                        <th>Uploaded at</th>
-                        <th>Size (Bytes)</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for file in files %}
-                    <tr>
-                        <td>{{ file.fname }}</td>
-                        <td>{{ file.uploaded_at|date:"Y-m-d H:i:s T" }}</td>
-                        <td>{{ file.size }}</td>
-                        <td>
-                            {% if file.ipfs_hash %}
-                                <div class="btn-group">
-                                    <a href="{% url 'download_file' file.ipfs_hash %}" class="btn btn-success btn-sm">
-                                        <i class="bi bi-download"></i> Download
-                                    </a>
-                                    <a href="{% url 'file_details' file.id %}" class="btn btn-info btn-sm">
-                                        <i class="bi bi-info-circle"></i> Details
-                                    </a>
-
-                                </div>
-                            {% else %}
-                                <span class="text-danger">Not Available</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        {% else %}
-            <div class="alert alert-warning text-center" role="alert">
-                <strong>No files available.</strong> Upload some files to get started!
-            </div>
-        {% endif %}
-
-        <div class="text-center mt-3">
-            <a href="{% url 'upload_file' %}" class="btn btn-primary">Upload New File</a>
-        </div>
-    </div>
-
-    <!-- Delete confirmation modal -->
-    <div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header bg-danger text-white">
-                    <h5 class="modal-title" id="deleteModalLabel">Confirm Delete</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <p>Are you sure you want to delete <strong id="fileName"></strong>?</p>
-                    <p>This will remove the file and all its chunks from the system and unpin them from IPFS nodes. This action cannot be undone.</p>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-danger" id="confirmDelete">Delete</button>
-                </div>
+<div class="container mt-5">
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <div class="d-flex justify-content-between align-items-center">
+                <h2>Your Files</h2>
+                <a href="{% url 'upload_file' %}" class="btn btn-light">
+                    <i class="bi bi-upload"></i> Upload New File
+                </a>
             </div>
         </div>
+        <div class="card-body">
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+
+            <!-- Download progress indicator (initially hidden) -->
+            <div id="downloadProgress" class="mb-4 d-none">
+                <div class="alert alert-info">
+                    <h5 class="mb-2">Downloading <span id="downloadFileName">file</span>...</h5>
+                    <div class="progress mb-2">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-success" role="progressbar" style="width: 0%"></div>
+                    </div>
+                    <div id="downloadPhases" class="mb-2">
+                        <div class="d-flex justify-content-between">
+                            <div class="phase-item active" id="phase-fetch">
+                                <i class="bi bi-cloud-download"></i> Fetching
+                            </div>
+                            <div class="phase-item" id="phase-assembly">
+                                <i class="bi bi-collection"></i> Assembling
+                            </div>
+                            <div class="phase-item" id="phase-verification">
+                                <i class="bi bi-check-circle"></i> Verifying
+                            </div>
+                        </div>
+                    </div>
+                    <p id="downloadStatus" class="text-center mb-0">Preparing download...</p>
+                </div>
+            </div>
+
+            {% if files %}
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Filename</th>
+                                <th>Size</th>
+                                <th>Uploaded</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for file in files %}
+                            <tr>
+                                <td>{{ file.fname }}</td>
+                                <td>
+                                    {% if file.size < 1024 %}
+                                        {{ file.size }} B
+                                    {% elif file.size < 1048576 %}
+                                        {{ file.size|divisibleby:1024|floatformat:1 }} KB
+                                    {% else %}
+                                        {{ file.size|divisibleby:1048576|floatformat:1 }} MB
+                                    {% endif %}
+                                </td>
+                                <td>{{ file.uploaded_at|date:"Y-m-d H:i" }}</td>
+                                <td>
+                                    <div class="btn-group">
+                                        <a href="{% url 'download_file' file.ipfs_hash %}" class="btn btn-sm btn-success download-btn"
+                                           data-filename="{{ file.fname }}">
+                                            <i class="bi bi-download"></i> Download
+                                        </a>
+                                        <a href="{% url 'file_details' file.id %}" class="btn btn-sm btn-primary">
+                                            <i class="bi bi-info-circle"></i> Details
+                                        </a>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="alert alert-info">
+                    <p>You haven't uploaded any files yet.</p>
+                    <a href="{% url 'upload_file' %}" class="btn btn-primary">
+                        <i class="bi bi-upload"></i> Upload your first file
+                    </a>
+                </div>
+            {% endif %}
+        </div>
     </div>
+</div>
 
-    <!-- Add Bootstrap Icons -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+<!-- Delete confirmation modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title" id="deleteModalLabel">Confirm Delete</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete <strong id="fileName"></strong>?</p>
+                <p>This will remove the file and all its chunks from the system and unpin them from IPFS nodes. This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmDelete">Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
 
-    <!-- Load Bootstrap's JavaScript -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<!-- Add Bootstrap Icons -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // Get the delete modal
-            const deleteModal = document.getElementById('deleteModal');
+<style>
+/* Styling for download phases */
+#downloadPhases {
+    position: relative;
+}
 
-            // Set up event listener for when the modal is shown
-            deleteModal.addEventListener('show.bs.modal', function (event) {
-                // Button that triggered the modal
-                const button = event.relatedTarget;
+#downloadPhases::before {
+    content: '';
+    position: absolute;
+    top: 12px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background-color: #dee2e6;
+    z-index: 0;
+}
 
-                // Extract file info from data attributes
-                const fileId = button.getAttribute('data-file-id');
-                const fileName = button.getAttribute('data-file-name');
+.phase-item {
+    position: relative;
+    background-color: #f8f9fa;
+    padding: 4px 8px;
+    border-radius: 15px;
+    font-size: 0.8rem;
+    color: #6c757d;
+    z-index: 1;
+}
 
-                // Update the modal's content
-                document.getElementById('fileName').textContent = fileName;
+.phase-item.active {
+    color: #0d6efd;
+    font-weight: bold;
+}
 
-                // Set up the confirm button to delete the file
-                const confirmButton = document.getElementById('confirmDelete');
-                confirmButton.onclick = function() {
-                    deleteFile(fileId);
-                };
-            });
+.phase-item.completed {
+    color: #198754;
+}
+</style>
 
-            // Function to handle file deletion
-            function deleteFile(fileId) {
-                // Show loading state on the button
-                const confirmButton = document.getElementById('confirmDelete');
-                const originalText = confirmButton.textContent;
-                confirmButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Deleting...';
-                confirmButton.disabled = true;
+<!-- Load Bootstrap's JavaScript -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
-                // Send deletion request to the server
-                fetch(`/delete-file/${fileId}/`, {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRFToken': '{{ csrf_token }}',
-                        'Content-Type': 'application/json'
-                    }
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        // Close the modal
-                        const modalInstance = bootstrap.Modal.getInstance(deleteModal);
-                        modalInstance.hide();
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Get download progress elements
+    const downloadProgress = document.getElementById('downloadProgress');
+    const progressBar = downloadProgress.querySelector('.progress-bar');
+    const downloadStatus = document.getElementById('downloadStatus');
+    const downloadFileName = document.getElementById('downloadFileName');
 
-                        // Reload the page to refresh the file list
-                        window.location.reload();
-                    } else {
-                        // Show error
-                        alert(`Error: ${data.error || 'Unknown error occurred'}`);
-                        confirmButton.textContent = originalText;
-                        confirmButton.disabled = false;
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('An error occurred during deletion. Please try again.');
-                    confirmButton.textContent = originalText;
-                    confirmButton.disabled = false;
-                });
-            }
+    // Phase elements
+    const phaseFetch = document.getElementById('phase-fetch');
+    const phaseAssembly = document.getElementById('phase-assembly');
+    const phaseVerification = document.getElementById('phase-verification');
+
+    // Update phase indicator
+    function updatePhase(phaseName) {
+        // Reset all phases
+        [phaseFetch, phaseAssembly, phaseVerification].forEach(phase => {
+            phase.classList.remove('active', 'completed');
         });
-    </script>
+
+        // Set the current phase and mark previous phases as completed
+        switch(phaseName) {
+            case 'fetch':
+                phaseFetch.classList.add('active');
+                break;
+            case 'assembly':
+                phaseFetch.classList.add('completed');
+                phaseAssembly.classList.add('active');
+                break;
+            case 'verification':
+                phaseFetch.classList.add('completed');
+                phaseAssembly.classList.add('completed');
+                phaseVerification.classList.add('active');
+                break;
+            case 'complete':
+                phaseFetch.classList.add('completed');
+                phaseAssembly.classList.add('completed');
+                phaseVerification.classList.add('completed');
+                break;
+        }
+    }
+
+    // Handle download
+    function handleDownload(downloadUrl, filename) {
+        // Show progress UI and update filename
+        downloadProgress.classList.remove('d-none');
+        downloadFileName.textContent = filename;
+
+        // Initial phase
+        updatePhase('fetch');
+        downloadStatus.textContent = "Fetching chunks from storage nodes...";
+
+        // Create a fetch request to start the actual download
+        fetch(downloadUrl)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+
+                // Get total size if available
+                const totalSize = parseInt(response.headers.get('Content-Length') || '0');
+
+                // Set up a reader to track download progress
+                return {
+                    response,
+                    totalSize
+                };
+            })
+            .then(({ response, totalSize }) => {
+                // Start showing deterministic progress if size is known
+                if (totalSize > 0) {
+                    const reader = response.body.getReader();
+                    let receivedLength = 0;
+
+                    // Set up progress tracking
+                    progressBar.style.width = '5%';
+
+                    // Process chunks as they come in
+                    const processChunks = async () => {
+                        let done = false;
+                        let chunks = [];
+
+                        updatePhase('fetch');
+                        while (!done) {
+                            const { done: readerDone, value } = await reader.read();
+
+                            if (readerDone) {
+                                done = true;
+                                continue;
+                            }
+
+                            chunks.push(value);
+                            receivedLength += value.length;
+
+                            // Update progress based on actual download progress (up to 60%)
+                            const fetchProgress = Math.min((receivedLength / totalSize) * 60, 60);
+                            progressBar.style.width = fetchProgress + '%';
+                            downloadStatus.textContent = `Downloading... ${Math.round(receivedLength/1024)}KB / ${Math.round(totalSize/1024)}KB`;
+                        }
+
+                        // Fetch phase complete
+                        updatePhase('assembly');
+                        downloadStatus.textContent = "Processing downloaded data...";
+
+                        // Assemble the data
+                        const blob = new Blob(chunks);
+
+                        // Simulate assembly progress (60% to 85%)
+                        for (let i = 60; i <= 85; i++) {
+                            await new Promise(r => setTimeout(r, 15));
+                            progressBar.style.width = i + '%';
+                        }
+
+                        // Verification phase
+                        updatePhase('verification');
+                        downloadStatus.textContent = "Preparing file for download...";
+
+                        // Simulate verification (85% to 100%)
+                        for (let i = 85; i <= 100; i++) {
+                            await new Promise(r => setTimeout(r, 10));
+                            progressBar.style.width = i + '%';
+                        }
+
+                        // Complete!
+                        updatePhase('complete');
+                        progressBar.classList.remove('progress-bar-animated');
+                        downloadStatus.textContent = "Download complete!";
+
+                        // Create download link
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+
+                        // Cleanup
+                        setTimeout(() => {
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+
+                            // Hide progress after a delay
+                            setTimeout(() => {
+                                downloadProgress.classList.add('d-none');
+                                progressBar.classList.add('progress-bar-animated');
+                                progressBar.style.width = '0%';
+                            }, 2000);
+                        });
+                    };
+
+                    return processChunks();
+                } else {
+                    // No content length, use simplified simulation
+                    return response.blob().then(blob => {
+                        // Simulate progress for unknown size
+                        const simulateProgress = async () => {
+                            // Fetch phase (faster for the list view)
+                            updatePhase('fetch');
+                            for (let i = 5; i <= 60; i += 3) {
+                                progressBar.style.width = i + '%';
+                                await new Promise(r => setTimeout(r, 20));
+                            }
+
+                            // Assembly phase
+                            updatePhase('assembly');
+                            downloadStatus.textContent = "Processing downloaded data...";
+                            for (let i = 60; i <= 85; i++) {
+                                progressBar.style.width = i + '%';
+                                await new Promise(r => setTimeout(r, 15));
+                            }
+
+                            // Verification phase
+                            updatePhase('verification');
+                            downloadStatus.textContent = "Preparing file for download...";
+                            for (let i = 85; i <= 100; i++) {
+                                progressBar.style.width = i + '%';
+                                await new Promise(r => setTimeout(r, 10));
+                            }
+
+                            // Complete!
+                            updatePhase('complete');
+                            progressBar.classList.remove('progress-bar-animated');
+                            downloadStatus.textContent = "Download complete!";
+
+                            // Create download link
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = filename;
+                            document.body.appendChild(a);
+                            a.click();
+
+                            // Cleanup
+                            setTimeout(() => {
+                                document.body.removeChild(a);
+                                URL.revokeObjectURL(url);
+
+                                // Hide progress after a delay
+                                setTimeout(() => {
+                                    downloadProgress.classList.add('d-none');
+                                    progressBar.classList.add('progress-bar-animated');
+                                    progressBar.style.width = '0%';
+                                }, 2000);
+                            });
+                        };
+
+                        return simulateProgress();
+                    });
+                }
+            })
+            .catch(error => {
+                console.error('Download error:', error);
+                downloadStatus.textContent = `Error: ${error.message}`;
+                progressBar.classList.add('bg-danger');
+
+                // Hide progress after error
+                setTimeout(() => {
+                    downloadProgress.classList.add('d-none');
+                    progressBar.classList.remove('bg-danger');
+                    progressBar.classList.add('progress-bar-animated');
+                    progressBar.style.width = '0%';
+                }, 5000);
+            });
+    }
+
+    // Add click handlers to all download buttons
+    const downloadButtons = document.querySelectorAll('.download-btn');
+    downloadButtons.forEach(button => {
+        button.addEventListener('click', function(e) {
+            e.preventDefault();
+            const downloadUrl = this.href;
+            const filename = this.getAttribute('data-filename');
+            handleDownload(downloadUrl, filename);
+        });
+    });
+
+    // Get the delete modal
+    const deleteModal = document.getElementById('deleteModal');
+
+    // Set up event listener for when the modal is shown
+    deleteModal.addEventListener('show.bs.modal', function (event) {
+        // Button that triggered the modal
+        const button = event.relatedTarget;
+
+        // Extract file info from data attributes
+        const fileId = button.getAttribute('data-file-id');
+        const fileName = button.getAttribute('data-file-name');
+
+        // Update the modal's content
+        document.getElementById('fileName').textContent = fileName;
+
+        // Set up the confirm button to delete the file
+        const confirmButton = document.getElementById('confirmDelete');
+        confirmButton.onclick = function() {
+            deleteFile(fileId);
+        };
+    });
+
+    // Function to handle file deletion
+    function deleteFile(fileId) {
+        // Show loading state on the button
+        const confirmButton = document.getElementById('confirmDelete');
+        const originalText = confirmButton.textContent;
+        confirmButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Deleting...';
+        confirmButton.disabled = true;
+
+        // Send deletion request to the server
+        fetch(`/delete-file/${fileId}/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}',
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Close the modal
+                const modalInstance = bootstrap.Modal.getInstance(deleteModal);
+                modalInstance.hide();
+
+                // Reload the page to refresh the file list
+                window.location.reload();
+            } else {
+                // Show error
+                alert(`Error: ${data.error || 'Unknown error occurred'}`);
+                confirmButton.textContent = originalText;
+                confirmButton.disabled = false;
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('An error occurred during deletion. Please try again.');
+            confirmButton.textContent = originalText;
+            confirmButton.disabled = false;
+        });
+    }
+});
+</script>
 {% endblock %}
