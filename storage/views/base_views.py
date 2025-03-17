@@ -657,8 +657,57 @@ def quick_node_check(request):
 
 @login_required
 def delete_file(request, file_id):
-    # Existing delete_file implementation...
-    pass
+    """Deletes a file and all its associated chunks and distributions."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST method allowed'}, status=405)
+
+    # Get the file and ensure it belongs to the requesting user
+    file_obj = get_object_or_404(File, id=file_id, user=request.user)
+    filename = file_obj.fname  # Store the filename before deletion
+
+    # Track if deletion was successful
+    deletion_successful = False
+
+    try:
+        with transaction.atomic():
+            # Get all chunks associated with this file
+            chunks = FileChunk.objects.filter(file=file_obj)
+
+            # For each chunk, get its distributions
+            distributions_count = 0
+            for chunk in chunks:
+                # Count the distributions we're about to delete
+                distributions_count += chunk.distributions.count()
+
+                # Try to unpin from IPFS nodes (but don't stop deletion if this fails)
+                for dist in chunk.distributions.select_related('node'):
+                    try:
+                        # Attempt to unpin from the node
+                        node = dist.node
+                        if node.is_active:
+                            node_url = node.get_api_url()
+                            requests.post(
+                                f"{node_url}/pin/rm?arg={chunk.ipfs_hash}",
+                                timeout=TIMEOUTS['QUICK_CHECK']
+                            )
+                    except Exception as e:
+                        # Log error but continue with deletion
+                        print(f"Error unpinning chunk {chunk.ipfs_hash} from node {node.name}: {str(e)}")
+
+            # Delete the file (this will cascade delete chunks and their distributions)
+            file_obj.delete()
+            deletion_successful = True  # Mark deletion as successful
+
+            # Add success message
+            messages.success(request, f"File '{filename}' successfully deleted.")
+
+    except Exception as e:
+        # Only show error message if deletion wasn't successful
+        if not deletion_successful:
+            messages.error(request, f"Error deleting file: {str(e)}")
+
+    # Always redirect to file list, regardless of success or failure
+    return redirect('file_list')
 
 @login_required
 def debug_download(request, file_id):

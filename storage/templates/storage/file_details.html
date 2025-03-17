@@ -209,31 +209,21 @@ document.addEventListener('DOMContentLoaded', function() {
             confirmDeleteBtn.disabled = true;
             confirmDeleteBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Deleting...';
 
-            // Send delete request
-            fetch('{% url "delete_file" file.id %}', {
-                method: 'POST',
-                headers: {
-                    'X-CSRFToken': '{{ csrf_token }}'
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    // Redirect to file list on success
-                    window.location.href = '{% url "file_list" %}';
-                } else {
-                    // Show error
-                    alert('Error: ' + (data.error || 'Unknown error occurred'));
-                    confirmDeleteBtn.disabled = false;
-                    confirmDeleteBtn.textContent = 'Delete Permanently';
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('An error occurred during deletion');
-                confirmDeleteBtn.disabled = false;
-                confirmDeleteBtn.textContent = 'Delete Permanently';
-            });
+            // Create a form and submit it directly
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '{% url "delete_file" file.id %}';
+
+            // Add CSRF token
+            const csrfToken = document.createElement('input');
+            csrfToken.type = 'hidden';
+            csrfToken.name = 'csrfmiddlewaretoken';
+            csrfToken.value = '{{ csrf_token }}';
+            form.appendChild(csrfToken);
+
+            // Append to body, submit, then remove
+            document.body.appendChild(form);
+            form.submit();
         });
     }
 });
