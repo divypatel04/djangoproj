@@ -100,6 +100,23 @@ class Node(models.Model):
         used_gb = used_mb / 1024
         return max(0, self.capacity_gb - used_gb)
 
+    def calculate_load_percentage(self):
+        """Calculate the load percentage based on capacity usage."""
+        used_mb = self.get_used_space_mb()
+        capacity_mb = self.capacity_gb * 1024  # Convert GB to MB
+        if capacity_mb <= 0:
+            return 100.0  # Prevent division by zero
+
+        # Calculate percentage of capacity used
+        percentage = (used_mb / capacity_mb) * 100
+        # Return percentage rounded to 1 decimal place, capped at 100%
+        return min(round(percentage, 1), 100.0)
+
+    def update_load(self):
+        """Update the node's load based on its current usage."""
+        self.load = self.calculate_load_percentage()
+        self.save()
+
 class ChunkDistribution(models.Model):
     """Tracks which chunks are stored on which nodes."""
     chunk = models.ForeignKey(FileChunk, on_delete=models.CASCADE, related_name="distributions")

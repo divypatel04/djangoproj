@@ -29,13 +29,7 @@
                                     <a href="{% url 'file_details' file.id %}" class="btn btn-info btn-sm">
                                         <i class="bi bi-info-circle"></i> Details
                                     </a>
-                                    <button type="button" class="btn btn-danger btn-sm"
-                                            data-bs-toggle="modal"
-                                            data-bs-target="#deleteModal"
-                                            data-file-id="{{ file.id }}"
-                                            data-file-name="{{ file.fname }}">
-                                        <i class="bi bi-trash"></i> Delete
-                                    </button>
+
                                 </div>
                             {% else %}
                                 <span class="text-danger">Not Available</span>

@@ -153,13 +153,13 @@ def distribute_chunk_to_node(chunk, node, retry_count=0):
 
             if response.status_code == 200:
                 # Record the distribution regardless of verification
-                # This change ensures the distribution is recorded
                 distribution, created = ChunkDistribution.objects.get_or_create(chunk=chunk, node=node)
 
-                # Update node load
-                node.load = min(node.load + 0.2, 100.0)  # Increment but cap at 100%
-                node.consecutive_failures = 0  # Reset failure counter on success
-                node.save()
+                # Update node load based on actual capacity usage
+                if created:
+                    node.update_load()  # Use the new method to calculate load
+                    node.consecutive_failures = 0  # Reset failure counter on success
+                    node.save()
 
                 # Record success in our circuit breaker
                 record_node_success(node.id, 'pin')
@@ -175,12 +175,11 @@ def distribute_chunk_to_node(chunk, node, retry_count=0):
                 return distribute_chunk_to_node(chunk, node, retry_count + 1)
 
         # If we get here, there was an issue but we'll create the distribution record anyway
-        # This is a fallback to ensure we have some distribution
         try:
             distribution, created = ChunkDistribution.objects.get_or_create(chunk=chunk, node=node)
             if created:
                 # Update load only if we created a new record
-                node.load = min(node.load + 0.1, 100.0)
+                node.update_load()  # Use the new method to calculate load
                 node.save()
                 return True
         except Exception as db_error:
