@@ -243,8 +243,144 @@ def upload_file(request):
 
 @login_required
 def download_file(request, ipfs_hash):
-    # Existing download_file implementation...
-    pass
+    """Download file from IPFS with chunk reassembly, using optimal node selection."""
+    try:
+        # Get the file record
+        file_obj = get_object_or_404(File, ipfs_hash=ipfs_hash)
+
+        # Verify user has access to this file
+        if file_obj.user != request.user and not request.user.is_staff:
+            return HttpResponse("Access denied", status=403)
+
+        # Check if this file has chunks
+        chunks = FileChunk.objects.filter(file=file_obj).order_by('chunk_index')
+
+        if not chunks.exists():
+            # If no chunks, just download the file directly
+            try:
+                response = requests.post(f"{IPFS_API_URL}/cat?arg={ipfs_hash}", timeout=TIMEOUTS['UPLOAD_OPERATION'])
+                if response.status_code != 200:
+                    return HttpResponse(f"IPFS error: {response.text}", status=500)
+                file_data = response.content
+            except requests.exceptions.RequestException as e:
+                return HttpResponse(f"Error retrieving file: {str(e)}", status=500)
+        else:
+            # If chunks exist, reassemble the file, fetching each chunk from the best node
+            assembled_data = bytearray()
+            failed_chunks = []
+
+            for chunk in chunks:
+                # Find nodes where this chunk is distributed
+                distributions = ChunkDistribution.objects.filter(chunk=chunk).select_related('node')
+
+                # Try to get the chunk from each node, starting with least loaded
+                chunk_data = None
+                chunk_error = None
+
+                if distributions.exists():
+                    # Try each node in order of load
+                    for dist in sorted(distributions, key=lambda d: d.node.load):
+                        node = dist.node
+                        if not node.is_active:
+                            continue
+
+                        try:
+                            # Fetch from this node
+                            node_url = node.get_api_url()
+                            response = requests.post(
+                                f"{node_url}/cat?arg={chunk.ipfs_hash}",
+                                timeout=TIMEOUTS['UPLOAD_OPERATION']
+                            )
+
+                            if response.status_code == 200:
+                                chunk_data = response.content
+                                break
+                            else:
+                                chunk_error = f"Node {node.name} returned status {response.status_code}"
+                        except Exception as e:
+                            chunk_error = f"Node {node.name} error: {str(e)}"
+                            continue
+
+                # If all distributed nodes failed, fall back to the default IPFS API
+                if chunk_data is None:
+                    try:
+                        response = requests.post(
+                            f"{IPFS_API_URL}/cat?arg={chunk.ipfs_hash}",
+                            timeout=TIMEOUTS['UPLOAD_OPERATION']
+                        )
+
+                        if response.status_code == 200:
+                            chunk_data = response.content
+                        else:
+                            failed_chunks.append(f"Chunk {chunk.chunk_index}: {response.text}")
+                    except Exception as e:
+                        failed_chunks.append(f"Chunk {chunk.chunk_index}: {chunk_error or str(e)}")
+
+                # Still no chunk data? That's a problem
+                if chunk_data is None:
+                    return HttpResponse(
+                        f"Failed to retrieve chunk {chunk.chunk_index} from any node. Errors: {', '.join(failed_chunks)}",
+                        status=500
+                    )
+
+                # Add the chunk data to our assembled file
+                assembled_data.extend(chunk_data)
+
+            # Verify the checksum if available
+            if file_obj.checksum:
+                calculated_hash = hashlib.sha256(assembled_data).hexdigest()
+                if calculated_hash != file_obj.checksum:
+                    return HttpResponse(
+                        f"Downloaded file failed checksum verification! Expected {file_obj.checksum}, got {calculated_hash}",
+                        status=500
+                    )
+
+            # Set the file data to our assembled content
+            file_data = bytes(assembled_data)
+
+        # Determine content type based on file extension
+        content_type = "application/octet-stream"  # Default
+        filename = file_obj.fname
+
+        # Get extension from filename
+        if '.' in filename:
+            ext = filename.split('.')[-1].lower()
+            if ext in ['jpg', 'jpeg']:
+                content_type = 'image/jpeg'
+            elif ext == 'png':
+                content_type = 'image/png'
+            elif ext == 'pdf':
+                content_type = 'application/pdf'
+            elif ext in ['doc', 'docx']:
+                content_type = 'application/msword'
+            elif ext in ['xls', 'xlsx']:
+                content_type = 'application/vnd.ms-excel'
+            elif ext == 'txt':
+                content_type = 'text/plain'
+            elif ext == 'mp3':
+                content_type = 'audio/mpeg'
+            elif ext == 'mp4':
+                content_type = 'video/mp4'
+            elif ext == 'zip':
+                content_type = 'application/zip'
+
+        # Return as a downloadable response
+        response = HttpResponse(file_data, content_type=content_type)
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response["Content-Length"] = len(file_data)
+
+        # Add cache headers to prevent caching of potentially sensitive files
+        response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response["Pragma"] = "no-cache"
+        response["Expires"] = "0"
+
+        return response
+
+    except File.DoesNotExist:
+        return HttpResponse("File not found", status=404)
+    except Exception as e:
+        print(f"Error downloading file: {str(e)}")
+        return HttpResponse(f"File retrieval failed: {str(e)}", status=500)
 
 @login_required
 def file_details(request, file_id):
