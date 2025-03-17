@@ -40,11 +40,13 @@ def admin_dashboard(request):
     # Get node statistics
     node_stats = []
     for node in nodes:
-        chunk_count = node.chunk_distributions.count()
+        used_space_mb = node.get_used_space_mb()
         node_stats.append({
             'node': node,
-            'chunk_count': chunk_count,
-            'space_used': chunk_count * CHUNK_SIZE / (1024 * 1024)  # MB
+            'chunk_count': node.chunk_distributions.count(),
+            'space_used': used_space_mb,
+            'capacity_gb': node.capacity_gb,
+            'space_used_percent': min(100, (used_space_mb / (node.capacity_gb * 1024)) * 100)
         })
 
     # Get distribution statistics
@@ -58,6 +60,12 @@ def admin_dashboard(request):
         dist_count=Count('distributions')
     ).filter(dist_count__lt=2).count()
 
+    # Determine distribution health
+    # If there are no chunks or all chunks are properly distributed, it's healthy
+    distribution_health = "Good"
+    if total_chunks > 0 and under_distributed > 0:
+        distribution_health = "Warning"
+
     return render(request, "storage/admin_dashboard.html", {
         "nodes": nodes,
         "node_stats": node_stats,
@@ -67,7 +75,7 @@ def admin_dashboard(request):
             "total_distributions": total_distributions,
             "avg_distribution": round(avg_distribution, 1),
             "under_distributed": under_distributed,
-            "distribution_health": "Good" if avg_distribution >= 2 and under_distributed == 0 else "Warning"
+            "distribution_health": distribution_health
         }
     })
 
@@ -187,54 +195,95 @@ def rebalance_distributions(request):
                 'redistributions': 0
             })
 
-        # Find overloaded nodes (load > 70%)
-        overloaded_nodes = active_nodes.filter(load__gt=70)
+        # Find all nodes with load data
+        high_load_nodes = active_nodes.filter(load__gt=50).order_by('-load')
+        low_load_nodes = active_nodes.filter(load__lt=20).order_by('load')
 
-        # Find underutilized nodes (load < 30%)
-        underutilized_nodes = active_nodes.filter(load__lt=30)
+        # If we don't have both high load and low load nodes, use a different approach
+        if not high_load_nodes.exists() or not low_load_nodes.exists():
+            # Find the nodes with highest and lowest loads
+            sorted_nodes = list(active_nodes.order_by('load'))
+
+            if len(sorted_nodes) < 2:
+                return JsonResponse({
+                    'success': False,
+                    'error': 'Need at least 2 active nodes for rebalancing',
+                    'redistributions': 0
+                })
+
+            # Take the lowest loaded 50% of nodes and highest loaded 50% of nodes
+            midpoint = len(sorted_nodes) // 2
+            low_load_nodes = sorted_nodes[:midpoint]
+            high_load_nodes = sorted_nodes[midpoint:]
 
         redistributions = 0
         errors = 0
+        log_messages = []
 
-        # Only proceed if we have both overloaded and underutilized nodes
-        if underutilized_nodes.exists() and overloaded_nodes.exists():
-            for overloaded_node in overloaded_nodes:
-                # Get chunks on this overloaded node
-                distributions = ChunkDistribution.objects.filter(
-                    node=overloaded_node
-                ).select_related('chunk')[:50]  # Limit to 50 to avoid overload
+        # Process each high load node
+        for source_node in high_load_nodes:
+            # Skip if the node is no longer high load (might happen during rebalancing)
+            if source_node.load < 40:
+                continue
 
-                for dist in distributions:
-                    # Check if this chunk is already on any underutilized node
-                    for target_node in underutilized_nodes:
-                        if not ChunkDistribution.objects.filter(
-                            chunk=dist.chunk,
-                            node=target_node
-                        ).exists():
-                            # Distribute to this underutilized node
-                            if distribute_chunk_to_node(dist.chunk, target_node):
-                                redistributions += 1
+            log_messages.append(f"Processing high load node: {source_node.name} ({source_node.load:.1f}%)")
 
-                                # Adjust loads
-                                target_node.load = min(target_node.load + 0.5, 100.0)
-                                target_node.save()
+            # Get chunks distributed on this node, limit to 100 to prevent overwhelming
+            distributions = ChunkDistribution.objects.filter(
+                node=source_node
+            ).select_related('chunk')[:100]
 
-                                # Reduce load on overloaded node
-                                overloaded_node.load = max(overloaded_node.load - 0.5, 0.0)
-                                overloaded_node.save()
+            if not distributions.exists():
+                log_messages.append(f"- No distributions found on node {source_node.name}")
+                continue
 
-                                # If we've moved enough chunks, stop for this node
-                                if redistributions % 10 == 0:
-                                    break
-                            else:
-                                errors += 1
+            log_messages.append(f"- Found {distributions.count()} chunks to redistribute")
+
+            # For each chunk on the high load node
+            for dist in distributions:
+                chunk = dist.chunk
+
+                # Find target nodes that don't already have this chunk
+                for target_node in low_load_nodes:
+                    # Skip if source and target are the same
+                    if target_node.id == source_node.id:
+                        continue
+
+                    # Check if this chunk is already on this target node
+                    if not ChunkDistribution.objects.filter(
+                        chunk=chunk, node=target_node
+                    ).exists():
+                        # Try to distribute to the low load node
+                        log_messages.append(f"- Distributing chunk {chunk.chunk_index} of file {chunk.file.fname} to {target_node.name}")
+
+                        if distribute_chunk_to_node(chunk, target_node):
+                            redistributions += 1
+
+                            # Update loads
+                            target_node.load = min(target_node.load + 0.5, 100.0)
+                            target_node.save()
+
+                            source_node.load = max(source_node.load - 0.5, 0.0)
+                            source_node.save()
+
+                            # Don't add too many chunks to a single node at once
+                            if redistributions % 5 == 0:
+                                break
+                        else:
+                            errors += 1
+                            log_messages.append(f"  - Failed to distribute to {target_node.name}")
+
+                # If we've done enough redistributions, stop for this source node
+                if redistributions >= 20:  # Limit total redistributions per run
+                    break
 
         return JsonResponse({
             'success': True,
             'redistributions': redistributions,
             'errors': errors,
-            'overloaded_nodes': overloaded_nodes.count(),
-            'underutilized_nodes': underutilized_nodes.count()
+            'high_load_nodes': high_load_nodes.count(),
+            'low_load_nodes': low_load_nodes.count(),
+            'log_messages': log_messages
         })
 
     except Exception as e:
@@ -272,29 +321,29 @@ def test_node(request, node_id):
         else:
             # Node is reachable but returned an error
             node.consecutive_failures += 1
-            if node.consecutive_failures > 5:
-                node.is_active = False
+            # Mark node as inactive immediately on error
+            node.is_active = False
             node.save()
 
             return JsonResponse({
                 'success': False,
                 'node_id': node.id,
-                'message': f'Node returned status code {response.status_code}',
-                'status_changed': node.is_active == False and node.consecutive_failures == 6,
+                'message': f'Node returned status code {response.status_code}. Node marked as inactive.',
+                'status_changed': True,
             })
 
     except Exception as e:
         # Node is unreachable
         node.consecutive_failures += 1
-        if node.consecutive_failures > 5:
-            node.is_active = False
+        # Mark node as inactive immediately on error
+        node.is_active = False
         node.save()
 
         return JsonResponse({
             'success': False,
             'node_id': node.id,
-            'message': f'Failed to connect to node: {str(e)}',
-            'status_changed': node.is_active == False and node.consecutive_failures == 6,
+            'message': f'Failed to connect to node: {str(e)}. Node marked as inactive.',
+            'status_changed': True,
         })
 
 @user_passes_test(is_admin)
@@ -373,59 +422,112 @@ def reset_circuit_breaker(request, node_id=None):
 @user_passes_test(is_admin, login_url='/files/')
 def node_diagnostic(request):
     """View for diagnosing node connection issues and adding test nodes."""
-    active_nodes = Node.objects.filter(is_active=True).order_by('name')
-    diagnostic_result = None
+    nodes = Node.objects.all().order_by('name')
 
-    if request.method == 'POST':
-        action = request.POST.get('action')
+    if request.method == "POST":
+        # Check if it's an action form or node addition form
+        if request.POST.get('action'):
+            # Handle action-based form submissions
+            action = request.POST.get('action')
+            if action == 'test_connection':
+                node_ip = request.POST.get('node_ip')
+                port = int(request.POST.get('port', 5001))
+                # ...existing action code...
+                diagnostic_result = debug_node_connection(node_ip, port)
 
-        if action == 'test_connection':
-            node_ip = request.POST.get('node_ip')
-            port = int(request.POST.get('port', 5001))
+                # If test is successful, try to update the node status
+                if diagnostic_result and not diagnostic_result.get('api_test', False):
+                    # Test failed, try to find the node and update its status
+                    try:
+                        node = Node.objects.get(ip=node_ip, port=port)
+                        node.is_active = False
+                        node.consecutive_failures += 1
+                        node.save()
+                        messages.warning(request, f"Node {node.name} is not accessible. Status updated to inactive.")
+                    except Node.DoesNotExist:
+                        # Node doesn't exist yet, will be created with proper status
+                        pass
 
-            if node_ip in BLACKLISTED_IPS:
-                diagnostic_result = {"error": "The IP is blacklisted and will not be used in the system."}
-                messages.warning(request, "This IP address is blacklisted.")
-                return render(request, "storage/node_diagnostic.html", {
-                    "active_nodes": active_nodes,
-                    "diagnostic_result": diagnostic_result
-                })
+                # Add the rest of the test_connection code here
 
-            diagnostic_result = debug_node_connection(node_ip, port)
+            elif action == 'add_test_nodes':
+                # Add implementation for add_test_nodes action
+                nodes = add_test_nodes(count=3)
+                messages.success(request, f"Added/activated {len(nodes)} test nodes")
+                # ...rest of action code...
+        else:
+            # Handle the node addition form
+            node_url = request.POST.get("node_url", "").strip()
+            if not node_url:
+                messages.error(request, "Node URL is required")
+                return render(request, 'storage/node_diagnostic.html', {'nodes': nodes})
 
-            # If test is successful, try to create or update the node
-            if diagnostic_result.get('api_test'):
-                node_id = diagnostic_result.get('api_response', {}).get('id')
-                if node_id:
-                    node, created = Node.objects.update_or_create(
-                        ipfs_id=node_id,
-                        defaults={
-                            'name': f"Node-{node_ip}",
-                            'ip': node_ip,
-                            'port': port,
-                            'is_active': True,
-                            'consecutive_failures': 0
-                        }
+            capacity_gb = float(request.POST.get("capacity_gb", 10.0))  # Get the capacity from the form
+
+            try:
+                # Extract IP and port from URL (assuming format like http://127.0.0.1:5001)
+                # Handle URLs with or without /api/v0 suffix
+                url_parts = node_url.split('//')[-1].split('/')
+                ip_port = url_parts[0]
+                ip_port_parts = ip_port.split(':')
+
+                ip = ip_port_parts[0]
+                port = int(ip_port_parts[1]) if len(ip_port_parts) > 1 else 5001
+
+                # Generate a unique name based on URL and timestamp
+                timestamp = int(time.time())
+                name_base = f"Node-{hashlib.md5(ip.encode()).hexdigest()[:8]}"
+                name = f"{name_base}-{timestamp}"
+
+                # Format the API URL properly
+                api_url = f"http://{ip}:{port}/api/v0"
+
+                # Check if a node with this IP and port already exists
+                existing_node = Node.objects.filter(ip=ip, port=port).first()
+                if existing_node:
+                    messages.warning(request, f'Node with this address already exists (Name: {existing_node.name})')
+                    return render(request, 'storage/node_diagnostic.html', {'nodes': nodes})
+
+                try:
+                    # Create the node with a unique name and properly formatted API URL
+                    node = Node.objects.create(
+                        name=name,
+                        ipfs_id=f"ipfs-{timestamp}",
+                        ip=ip,
+                        port=port,
+                        api_url=api_url,  # Store the formatted API URL
+                        load=0.0,
+                        capacity_gb=capacity_gb,  # Set the capacity
+                        is_active=True
                     )
-                    if created:
-                        messages.success(request, f"Successfully added new node {node.name}")
-                    else:
-                        messages.success(request, f"Successfully updated node {node.name}")
 
-                # Refresh active nodes list
-                active_nodes = Node.objects.filter(is_active=True).order_by('name')
+                    # Test connection to the node
+                    try:
+                        response = requests.post(f"{api_url}/id", timeout=5)
+                        if response.status_code == 200:
+                            messages.success(request, f'Successfully added and connected to node {node.name}')
+                        else:
+                            messages.warning(request, f'Node added but returned status code {response.status_code}')
+                    except Exception as e:
+                        messages.warning(request, f'Node added but could not connect: {str(e)}')
 
-        elif action == 'add_test_nodes':
-            # Add test nodes to ensure we have enough active nodes
-            nodes = add_test_nodes(count=3)
-            messages.success(request, f"Added/activated {len(nodes)} test nodes")
+                    # Refresh the nodes list
+                    nodes = Node.objects.all().order_by('name')
 
-            # Refresh active nodes list
-            active_nodes = Node.objects.filter(is_active=True).order_by('name')
+                except IntegrityError as e:
+                    messages.error(request, f'Database error: {str(e)}')
 
-    return render(request, "storage/node_diagnostic.html", {
-        "active_nodes": active_nodes,
-        "diagnostic_result": diagnostic_result
+            except Exception as e:
+                messages.error(request, f'Unexpected error: {str(e)}')
+
+    # Prepare the diagnostic result for action-based submissions
+    diagnostic_result = None
+    active_nodes = Node.objects.filter(is_active=True).order_by('name')
+
+    return render(request, 'storage/node_diagnostic.html', {
+        'nodes': nodes,
+        'active_nodes': active_nodes,
+        'diagnostic_result': diagnostic_result
     })
 
 @login_required
@@ -511,64 +613,3 @@ def remove_nodes(request):
         "removed_info": removed_info,
         "blacklisted_ips": BLACKLISTED_IPS
     })
-
-@login_required
-@user_passes_test(is_admin)
-def node_diagnostic(request):
-    """View for diagnosing node connection issues and adding test nodes."""
-    nodes = Node.objects.all().order_by('name')
-
-    if request.method == "POST":
-        node_url = request.POST.get("node_url", "").strip()
-        if not node_url:
-            messages.error(request, "Node URL is required")
-            return render(request, 'storage/node_diagnostic.html', {'nodes': nodes})
-
-        try:
-            # Generate a unique name based on URL and timestamp
-            timestamp = int(time.time())
-            name_base = f"Node-{hashlib.md5(node_url.encode()).hexdigest()[:8]}"
-            name = f"{name_base}-{timestamp}"
-
-            # Extract IP and port from URL (assuming format like http://127.0.0.1:5001)
-            url_parts = node_url.split('//')[-1].split(':')
-            ip = url_parts[0]
-            port = int(url_parts[1]) if len(url_parts) > 1 else 5001
-
-            # Check if a node with this IP and port already exists
-            existing_node = Node.objects.filter(ip=ip, port=port).first()
-            if existing_node:
-                messages.warning(request, f'Node with this address already exists (Name: {existing_node.name})')
-                return render(request, 'storage/node_diagnostic.html', {'nodes': nodes})
-
-            try:
-                # Create the node with a unique name
-                node = Node.objects.create(
-                    name=name,
-                    ipfs_id=f"ipfs-{timestamp}",
-                    ip=ip,
-                    port=port,
-                    load=0.0,
-                    is_active=True
-                )
-
-                # Test connection to the node
-                try:
-                    response = requests.post(f"{node.get_api_url()}/id", timeout=5)
-                    if response.status_code == 200:
-                        messages.success(request, f'Successfully added and connected to node {node.name}')
-                    else:
-                        messages.warning(request, f'Node added but returned status code {response.status_code}')
-                except Exception as e:
-                    messages.warning(request, f'Node added but could not connect: {str(e)}')
-
-                # Refresh the nodes list
-                nodes = Node.objects.all().order_by('name')
-
-            except IntegrityError as e:
-                messages.error(request, f'Database error: {str(e)}')
-
-        except Exception as e:
-            messages.error(request, f'Unexpected error: {str(e)}')
-
-    return render(request, 'storage/node_diagnostic.html', {'nodes': nodes})

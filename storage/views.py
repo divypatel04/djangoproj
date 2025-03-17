@@ -778,10 +778,10 @@ def rebalance_distributions(request):
         return JsonResponse({'error': 'Only POST method allowed'}, status=405)
 
     # Find overloaded nodes (load > 80%)
-    overloaded_nodes = Node.objects.filter(is_active=True, load__gt=80)
+    overloaded_nodes = Node.objects.filter(is_active=True, load__gt=70)
 
     # Find underutilized nodes (load < 30%)
-    underutilized_nodes = Node.objects.filter(is_active=True, load__lt=30)
+    underutilized_nodes = Node.objects.filter(is_active=True, load__lt=40)
 
     redistributions = 0
 

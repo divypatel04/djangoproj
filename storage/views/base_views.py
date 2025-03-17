@@ -550,32 +550,55 @@ def system_health_check(request):
 
 @csrf_exempt
 def system_status(request):
-    """Check system status including IPFS availability."""
+    """Check system status based only on database nodes, not IPFS daemon."""
     try:
-        # First check if IPFS is accessible
-        try:
-            response = requests.post(f"{IPFS_API_URL}/version", timeout=TIMEOUTS['QUICK_CHECK'])
-            ipfs_available = response.status_code == 200
-        except Exception:
-            ipfs_available = False
+        # Get all active nodes from the database
+        active_nodes = Node.objects.filter(is_active=True)
+        node_count = active_nodes.count()
 
-        # Get node information
-        nodes = Node.objects.all()
-        active_nodes = sum(1 for node in nodes if node.is_active)
-        available_storage = sum(max(100 - node.load, 0) * 0.1 for node in nodes if node.is_active)
+        # Check if any nodes are responsive
+        system_operational = False
+        responsive_nodes = 0
 
+        if node_count > 0:
+            # Test a sample of nodes (max 3)
+            test_nodes = active_nodes[:3]
+
+            for node in test_nodes:
+                try:
+                    # Skip if circuit breaker indicates we should
+                    if should_skip_node(node.id, 'check'):
+                        continue
+
+                    response = requests.post(f"{node.get_api_url()}/id", timeout=TIMEOUTS['QUICK_CHECK'])
+                    if response.status_code == 200:
+                        responsive_nodes += 1
+                        # Record success
+                        record_node_success(node.id, 'check')
+                        # If at least one node is responsive, the system is operational
+                        system_operational = True
+                        break
+                except Exception:
+                    # Record failure but continue checking other nodes
+                    record_node_failure(node.id, 'check')
+
+        # Calculate available storage based on node capacities
+        available_storage = sum(node.get_available_space_gb() for node in active_nodes)
+
+        # Determine warning message based on conditions
         node_warning = ""
-        if not ipfs_available:
-            node_warning = "IPFS daemon is not accessible!"
-        elif active_nodes == 0:
+        if node_count == 0:
             node_warning = "No storage nodes configured! Contact administrator."
+        elif not system_operational:
+            node_warning = "All storage nodes are unresponsive! Contact administrator."
 
         return JsonResponse({
-            'active_nodes': active_nodes,
+            'active_nodes': node_count,
+            'responsive_nodes': responsive_nodes,
             'available_storage': round(available_storage, 2),
-            'system_healthy': ipfs_available and active_nodes >= 1,
+            'system_healthy': system_operational,
             'warning': node_warning,
-            'ipfs_available': ipfs_available
+            'ipfs_available': system_operational  # Set this to match system_operational for compatibility
         })
     except Exception as e:
         return JsonResponse({

@@ -3,6 +3,8 @@ from django.contrib.auth.models import User
 
 # Import constants directly to avoid circular imports
 BLACKLISTED_IPS = ['103.143.148.185', '1.36.226.78', '104.168.82.126']
+# Import CHUNK_SIZE to use in the get_used_space_mb method
+from .constants import CHUNK_SIZE
 
 class File(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -68,6 +70,7 @@ class Node(models.Model):
     api_url = models.CharField(max_length=200, null=True, blank=True)
     is_active = models.BooleanField(default=True)
     load = models.FloatField(default=0.0)
+    capacity_gb = models.FloatField(default=10.0)  # Default capacity in GB
     last_seen = models.DateTimeField(auto_now=True)
     consecutive_failures = models.IntegerField(default=0)
 
@@ -85,6 +88,17 @@ class Node(models.Model):
         if self.api_url:
             return self.api_url
         return f"http://{self.ip}:{self.port}/api/v0"
+
+    def get_used_space_mb(self):
+        """Calculate the space used by this node in MB."""
+        chunk_count = self.chunk_distributions.count()
+        return chunk_count * CHUNK_SIZE / (1024 * 1024)
+
+    def get_available_space_gb(self):
+        """Calculate the available space in GB."""
+        used_mb = self.get_used_space_mb()
+        used_gb = used_mb / 1024
+        return max(0, self.capacity_gb - used_gb)
 
 class ChunkDistribution(models.Model):
     """Tracks which chunks are stored on which nodes."""
