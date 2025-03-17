@@ -261,8 +261,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Simulate download progress
-    function simulateDownloadProgress() {
+    // Improved download progress simulation with actual file download coordination
+    function handleDownload(downloadUrl) {
+        // Show progress UI
         downloadBtn.style.display = 'none';
         downloadProgress.classList.remove('d-none');
 
@@ -270,70 +271,193 @@ document.addEventListener('DOMContentLoaded', function() {
         updatePhase('fetch');
         downloadStatus.textContent = "Fetching chunks from storage nodes...";
 
-        // Simulate fetch progress (0% to 60%)
-        let progress = 0;
-        const fetchInterval = setInterval(() => {
-            progress += 1;
-            progressBar.style.width = progress + '%';
+        // Create a fetch request to start the actual download
+        fetch(downloadUrl)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
 
-            if (progress >= 60) {
-                clearInterval(fetchInterval);
+                // Get the filename from the Content-Disposition header if available
+                const contentDisposition = response.headers.get('Content-Disposition');
+                const filenameMatch = contentDisposition && contentDisposition.match(/filename="(.+)"/);
+                const filename = filenameMatch ? filenameMatch[1] : '{{ file.fname }}';
 
-                // Move to assembly phase
-                updatePhase('assembly');
-                downloadStatus.textContent = "Assembling file chunks...";
+                // Get total size if available
+                const totalSize = parseInt(response.headers.get('Content-Length') || '0');
 
-                // Simulate assembly progress (60% to 85%)
-                const assemblyInterval = setInterval(() => {
-                    progress += 1;
-                    progressBar.style.width = progress + '%';
+                // Set up a reader to track download progress
+                return {
+                    response,
+                    totalSize,
+                    filename
+                };
+            })
+            .then(({ response, totalSize, filename }) => {
+                // Start showing more deterministic progress if size is known
+                if (totalSize > 0) {
+                    const reader = response.body.getReader();
+                    let receivedLength = 0;
 
-                    if (progress >= 85) {
-                        clearInterval(assemblyInterval);
+                    // Set up progress tracking
+                    progressBar.style.width = '5%'; // Start at 5%
 
-                        // Move to verification phase
-                        updatePhase('verification');
-                        downloadStatus.textContent = "Verifying file integrity...";
+                    // Process chunks as they come in
+                    const processChunks = async () => {
+                        let done = false;
+                        let chunks = [];
 
-                        // Simulate verification progress (85% to 100%)
-                        const verificationInterval = setInterval(() => {
-                            progress += 1;
-                            progressBar.style.width = progress + '%';
+                        updatePhase('fetch');
+                        while (!done) {
+                            const { done: readerDone, value } = await reader.read();
 
-                            if (progress >= 100) {
-                                clearInterval(verificationInterval);
-                                updatePhase('complete');
-                                progressBar.classList.remove('progress-bar-animated');
-                                downloadStatus.textContent = "Download complete!";
+                            if (readerDone) {
+                                done = true;
+                                continue;
                             }
-                        }, 50);
-                    }
-                }, 30);
-            }
-        }, 20);
+
+                            chunks.push(value);
+                            receivedLength += value.length;
+
+                            // Update progress based on actual download progress (up to 60%)
+                            const fetchProgress = Math.min((receivedLength / totalSize) * 60, 60);
+                            progressBar.style.width = fetchProgress + '%';
+                            downloadStatus.textContent = `Downloading... ${Math.round(receivedLength/1024)}KB / ${Math.round(totalSize/1024)}KB`;
+                        }
+
+                        // Fetch phase complete
+                        updatePhase('assembly');
+                        downloadStatus.textContent = "Processing downloaded data...";
+
+                        // Assemble the data
+                        const blob = new Blob(chunks);
+
+                        // Simulate assembly progress (60% to 85%)
+                        for (let i = 60; i <= 85; i++) {
+                            await new Promise(r => setTimeout(r, 20));
+                            progressBar.style.width = i + '%';
+                        }
+
+                        // Verification phase
+                        updatePhase('verification');
+                        downloadStatus.textContent = "Preparing file for download...";
+
+                        // Simulate verification (85% to 100%)
+                        for (let i = 85; i <= 100; i++) {
+                            await new Promise(r => setTimeout(r, 15));
+                            progressBar.style.width = i + '%';
+                        }
+
+                        // Complete!
+                        updatePhase('complete');
+                        progressBar.classList.remove('progress-bar-animated');
+                        downloadStatus.textContent = "Download complete!";
+
+                        // Create download link
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+
+                        // Cleanup
+                        setTimeout(() => {
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+
+                            // Show download button again after a delay
+                            setTimeout(() => {
+                                downloadProgress.classList.add('d-none');
+                                downloadBtn.style.display = 'inline-block';
+                                progressBar.classList.add('progress-bar-animated');
+                                progressBar.style.width = '0%';
+                            }, 3000);
+                        });
+                    };
+
+                    return processChunks();
+                } else {
+                    // No content length, use simplified simulation
+                    return response.blob().then(blob => {
+                        // Simulate progress for unknown size
+                        const simulateProgress = async () => {
+                            // Fetch phase
+                            updatePhase('fetch');
+                            for (let i = 5; i <= 60; i += 2) {
+                                progressBar.style.width = i + '%';
+                                await new Promise(r => setTimeout(r, 30));
+                            }
+
+                            // Assembly phase
+                            updatePhase('assembly');
+                            downloadStatus.textContent = "Processing downloaded data...";
+                            for (let i = 60; i <= 85; i++) {
+                                progressBar.style.width = i + '%';
+                                await new Promise(r => setTimeout(r, 20));
+                            }
+
+                            // Verification phase
+                            updatePhase('verification');
+                            downloadStatus.textContent = "Preparing file for download...";
+                            for (let i = 85; i <= 100; i++) {
+                                progressBar.style.width = i + '%';
+                                await new Promise(r => setTimeout(r, 15));
+                            }
+
+                            // Complete!
+                            updatePhase('complete');
+                            progressBar.classList.remove('progress-bar-animated');
+                            downloadStatus.textContent = "Download complete!";
+
+                            // Create download link
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = filename;
+                            document.body.appendChild(a);
+                            a.click();
+
+                            // Cleanup
+                            setTimeout(() => {
+                                document.body.removeChild(a);
+                                URL.revokeObjectURL(url);
+
+                                // Show download button again after a delay
+                                setTimeout(() => {
+                                    downloadProgress.classList.add('d-none');
+                                    downloadBtn.style.display = 'inline-block';
+                                    progressBar.classList.add('progress-bar-animated');
+                                    progressBar.style.width = '0%';
+                                }, 3000);
+                            });
+                        };
+
+                        return simulateProgress();
+                    });
+                }
+            })
+            .catch(error => {
+                console.error('Download error:', error);
+                downloadStatus.textContent = `Error: ${error.message}`;
+                progressBar.classList.add('bg-danger');
+
+                // Show download button again after error
+                setTimeout(() => {
+                    downloadProgress.classList.add('d-none');
+                    downloadBtn.style.display = 'inline-block';
+                    progressBar.classList.remove('bg-danger');
+                    progressBar.classList.add('progress-bar-animated');
+                    progressBar.style.width = '0%';
+                }, 5000);
+            });
     }
 
-    // Intercept download button click to show progress
+    // Intercept download button click to use our improved method
     if (downloadBtn) {
         downloadBtn.addEventListener('click', function(e) {
             e.preventDefault();
-
-            // Store the download URL
-            const downloadUrl = this.href;
-
-            // Show progress simulation
-            simulateDownloadProgress();
-
-            // Start actual download in a hidden iframe
-            const downloadFrame = document.createElement('iframe');
-            downloadFrame.style.display = 'none';
-            downloadFrame.src = downloadUrl;
-            document.body.appendChild(downloadFrame);
-
-            // Set timeout to remove the iframe after download starts
-            setTimeout(() => {
-                document.body.removeChild(downloadFrame);
-            }, 5000);
+            handleDownload(this.href);
         });
     }
 
