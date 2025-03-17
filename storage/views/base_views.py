@@ -343,8 +343,74 @@ def redistribute_file(request, file_id):
 
 @user_passes_test(lambda u: u.is_superuser)
 def system_health_check(request):
-    # Existing system_health_check implementation...
-    pass
+    """Run a system-wide health check of file replication and node status."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Only POST method allowed'}, status=405)
+
+    try:
+        # Get files with insufficient chunk replication
+        under_replicated_files = []
+
+        # Find chunks with fewer than DISTRIBUTION_FACTOR distributions
+        under_distributed_chunks = FileChunk.objects.annotate(
+            distribution_count=Count('distributions')
+        ).filter(distribution_count__lt=DISTRIBUTION_FACTOR)
+
+        # Group by file
+        file_ids_with_issues = under_distributed_chunks.values_list('file_id', flat=True).distinct()
+        affected_files = File.objects.filter(id__in=file_ids_with_issues)
+
+        replication_fixed = 0
+
+        # Process each file
+        for file in affected_files:
+            file_chunks = FileChunk.objects.filter(file=file)
+            chunks_fixed = 0
+            total_chunks = file_chunks.count()
+
+            # Try to fix each chunk's replication
+            for chunk in file_chunks:
+                success, _ = ensure_chunk_replication(chunk, DISTRIBUTION_FACTOR)
+                if success:
+                    chunks_fixed += 1
+                    replication_fixed += 1
+
+            under_replicated_files.append({
+                'file_id': file.id,
+                'filename': file.fname,
+                'chunks_fixed': chunks_fixed,
+                'total_chunks': total_chunks
+            })
+
+        # Check for inactive nodes and try to reactivate
+        inactive_nodes = Node.objects.filter(is_active=False)
+        reactivated_nodes = 0
+
+        for node in inactive_nodes:
+            # Try to ping the node
+            try:
+                response = requests.post(f"{node.get_api_url()}/id", timeout=TIMEOUTS['QUICK_CHECK'])
+                if response.status_code == 200:
+                    node.is_active = True
+                    node.consecutive_failures = 0
+                    node.save()
+                    reactivated_nodes += 1
+            except Exception:
+                # Node is still down
+                pass
+
+        return JsonResponse({
+            'success': True,
+            'under_replicated_files': len(under_replicated_files),
+            'chunks_fixed': replication_fixed,
+            'reactivated_nodes': reactivated_nodes,
+            'details': under_replicated_files
+        })
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
 
 @csrf_exempt
 def system_status(request):
