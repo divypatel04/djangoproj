@@ -1,0 +1,211 @@
+{% extends 'storage/base.html' %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h2>Download Diagnostic</h2>
+        </div>
+        <div class="card-body">
+            <h3>{{ file.fname }}</h3>
+
+            <div class="alert alert-info">
+                <p><strong>This page provides diagnostic information to help debug download issues.</strong></p>
+                <p>If you're seeing this page, it means there may be issues downloading your file.</p>
+            </div>
+
+            <div class="row mt-4">
+                <div class="col-md-6">
+                    <h4>File Information</h4>
+                    <table class="table table-bordered">
+                        <tr>
+                            <th>Size</th>
+                            <td>{{ file.size }} bytes</td>
+                        </tr>
+                        <tr>
+                            <th>Uploaded</th>
+                            <td>{{ file.uploaded_at|date:"Y-m-d H:i:s T" }}</td>
+                        </tr>
+                        <tr>
+                            <th>Checksum (SHA-256)</th>
+                            <td><code>{{ file.checksum }}</code></td>
+                        </tr>
+                        <tr>
+                            <th>IPFS Hash</th>
+                            <td><code>{{ file.ipfs_hash }}</code></td>
+                        </tr>
+                        <tr>
+                            <th>Content Type</th>
+                            <td>{{ content_type }}</td>
+                        </tr>
+                    </table>
+                </div>
+                <div class="col-md-6">
+                    <h4>Download Status</h4>
+                    <div class="mb-3">
+                        <p><strong>Total chunks:</strong> {{ total_chunks }}</p>
+                        <p><strong>Missing chunks:</strong> {{ missing_chunks }}</p>
+                        <p><strong>Direct file access:</strong>
+                            {% if file_directly_accessible %}
+                                <span class="badge bg-success">Available</span>
+                            {% else %}
+                                <span class="badge bg-warning">Not directly accessible</span>
+                            {% endif %}
+                        </p>
+                    </div>
+
+                    <div class="d-flex flex-wrap gap-2">
+                        <a href="{% url 'download_file' file.ipfs_hash %}" class="btn btn-success">
+                            <i class="bi bi-download"></i> Standard Download
+                        </a>
+                        <a href="{% url 'file_details' file.id %}" class="btn btn-secondary">
+                            <i class="bi bi-info-circle"></i> Back to File Details
+                        </a>
+
+                        <button id="forceRedistributeBtn" class="btn btn-warning">
+                            <i class="bi bi-arrow-repeat"></i> Force Redistribution
+                        </button>
+                    </div>
+
+                    <div id="redistribution-status" class="mt-3"></div>
+                </div>
+            </div>
+
+            {% if chunk_details %}
+            <h4 class="mt-4">Chunk Availability</h4>
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Chunk #</th>
+                            <th>Size</th>
+                            <th>IPFS Hash</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for detail in chunk_details %}
+                        <tr>
+                            <td>{{ detail.chunk.chunk_index }}</td>
+                            <td>{{ detail.chunk.size }} bytes</td>
+                            <td><code>{{ detail.chunk.ipfs_hash }}</code></td>
+                            <td>
+                                {% if detail.available_count > 0 %}
+                                    <span class="badge bg-success">Available ({{ detail.available_count }} nodes)</span>
+                                {% else %}
+                                    <span class="badge bg-danger">Missing</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="http://127.0.0.1:5001/api/v0/cat?arg={{ detail.chunk.ipfs_hash }}"
+                                   class="btn btn-sm btn-outline-info" target="_blank">
+                                    Test Direct Access
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            <h4 class="mt-4">Node Distribution Details</h4>
+            {% for detail in chunk_details %}
+            <div class="card mb-3">
+                <div class="card-header">
+                    Chunk {{ detail.chunk.chunk_index }}
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Node</th>
+                                    <th>Status</th>
+                                    <th>Availability</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for status in detail.node_status %}
+                                <tr>
+                                    <td>{{ status.node.name }} ({{ status.node.ip }})</td>
+                                    <td>
+                                        {% if status.node.is_active %}
+                                            <span class="badge bg-success">Active</span>
+                                        {% else %}
+                                            <span class="badge bg-danger">Inactive</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if status.available %}
+                                            <span class="badge bg-success">Available</span>
+                                        {% else %}
+                                            <span class="badge bg-danger">Unavailable</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- Add Bootstrap Icons -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+
+<!-- JavaScript for debugging functionality -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Force redistribution functionality
+    const redistributeBtn = document.getElementById('forceRedistributeBtn');
+    const statusDiv = document.getElementById('redistribution-status');
+
+    if (redistributeBtn) {
+        redistributeBtn.addEventListener('click', function() {
+            // Show loading state
+            redistributeBtn.disabled = true;
+            redistributeBtn.textContent = 'Redistributing...';
+            statusDiv.innerHTML = '<div class="alert alert-info">Force redistributing chunks across nodes...</div>';
+
+            // Make AJAX request to redistribute
+            fetch('{% url "redistribute_file" file.id %}', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Show success message
+                statusDiv.innerHTML = `
+                    <div class="alert alert-success">
+                        Redistribution complete!
+                        <button class="btn btn-sm btn-outline-primary ms-2" onclick="window.location.reload()">
+                            Refresh Status
+                        </button>
+                    </div>
+                `;
+                redistributeBtn.disabled = false;
+                redistributeBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Force Redistribution';
+            })
+            .catch(error => {
+                // Show error
+                statusDiv.innerHTML = '<div class="alert alert-danger">Error during redistribution. Please try again.</div>';
+                redistributeBtn.disabled = false;
+                redistributeBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Force Redistribution';
+                console.error('Error:', error);
+            });
+        });
+    }
+});
+</script>
+
+<!-- Load Bootstrap's JavaScript -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+{% endblock %}

@@ -1,0 +1,144 @@
+{% extends 'storage/base.html' %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h2>Node Diagnostic Tool</h2>
+                </div>
+                <div class="card-body">
+                    <p class="lead">Add a new IPFS node to the system:</p>
+
+                    <form method="post" id="nodeForm">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="node_url" class="form-label">Node URL (e.g., http://127.0.0.1:5001)</label>
+                            <input type="text" class="form-control" id="node_url" name="node_url"
+                                   placeholder="http://127.0.0.1:5001" required>
+                            <div class="form-text">Enter the full URL including protocol (http/https), IP and port.</div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-plus-circle"></i> Add Node
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h2>Existing Nodes</h2>
+                </div>
+                <div class="card-body">
+                    {% if nodes %}
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>IP Address</th>
+                                        <th>Port</th>
+                                        <th>Status</th>
+                                        <th>Load</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for node in nodes %}
+                                    <tr>
+                                        <td>{{ node.name }}</td>
+                                        <td>{{ node.ip }}</td>
+                                        <td>{{ node.port }}</td>
+                                        <td>
+                                            {% if node.is_active %}
+                                            <span class="badge bg-success">Active</span>
+                                            {% else %}
+                                            <span class="badge bg-danger">Inactive</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>{{ node.load|floatformat:1 }}%</td>
+                                        <td>
+                                            <button class="btn btn-sm btn-primary test-node" data-node-id="{{ node.id }}">
+                                                <i class="bi bi-lightning"></i> Test
+                                            </button>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <div class="alert alert-info">
+                            No nodes have been added yet. Use the form above to add a node.
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Add event listeners to all "Test" buttons
+    const testButtons = document.querySelectorAll('.test-node');
+    testButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const nodeId = this.getAttribute('data-node-id');
+            this.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Testing...';
+            this.disabled = true;
+
+            // Send test request
+            fetch(`/api/test-node/${nodeId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}',
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`Success: ${data.message}`);
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+                // Reload the page to show updated status
+                window.location.reload();
+            })
+            .catch(error => {
+                alert(`Error: ${error.message}`);
+                this.innerHTML = '<i class="bi bi-lightning"></i> Test';
+                this.disabled = false;
+            });
+        });
+    });
+
+    // Form validation
+    const nodeForm = document.getElementById('nodeForm');
+    nodeForm.addEventListener('submit', function(e) {
+        const urlInput = document.getElementById('node_url');
+        const urlValue = urlInput.value.trim();
+
+        // Simple URL validation
+        if (!urlValue.startsWith('http://') && !urlValue.startsWith('https://')) {
+            e.preventDefault();
+            alert('URL must start with http:// or https://');
+            urlInput.focus();
+            return false;
+        }
+
+        // Make sure there's an IP and possibly a port
+        const urlParts = urlValue.split('//');
+        if (urlParts.length < 2 || !urlParts[1].includes('.')) {
+            e.preventDefault();
+            alert('Please enter a valid URL with an IP address');
+            urlInput.focus();
+            return false;
+        }
+    });
+});
+</script>
+{% endblock %}

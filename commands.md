@@ -1,0 +1,1 @@
+IPFS_PATH=~/.ipfs3 ipfs

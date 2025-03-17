@@ -1,0 +1,182 @@
+{% extends 'storage/base.html' %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h2>Manage Storage Nodes</h2>
+                </div>
+                <div class="card-body">
+                    {% if messages %}
+                        {% for message in messages %}
+                            <div class="alert alert-{{ message.tags }}">
+                                {{ message }}
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+
+                    {% if removed_info %}
+                        <div class="alert alert-success mb-4">
+                            <h5>Successfully removed the following nodes:</h5>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th>IP</th>
+                                            <th>Port</th>
+                                            <th>Distributions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for node in removed_info %}
+                                            <tr>
+                                                <td>{{ node.name }}</td>
+                                                <td>{{ node.ip }}</td>
+                                                <td>{{ node.port }}</td>
+                                                <td>{{ node.distributions }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    {% endif %}
+
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>
+                                            <input type="checkbox" id="selectAll" class="form-check-input">
+                                        </th>
+                                        <th>Name</th>
+                                        <th>IP</th>
+                                        <th>Port</th>
+                                        <th>Status</th>
+                                        <th>Load</th>
+                                        <th>Failures</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for node in nodes %}
+                                        <tr>
+                                            <td>
+                                                <input type="checkbox" name="selected_nodes" value="{{ node.id }}"
+                                                    class="form-check-input node-checkbox">
+                                            </td>
+                                            <td>{{ node.name }}</td>
+                                            <td>{{ node.ip }}</td>
+                                            <td>{{ node.port }}</td>
+                                            <td>
+                                                {% if node.is_active %}
+                                                    <span class="badge bg-success">Active</span>
+                                                {% else %}
+                                                    <span class="badge bg-danger">Inactive</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>{{ node.load|floatformat:1 }}%</td>
+                                            <td>{{ node.consecutive_failures }}</td>
+                                        </tr>
+                                    {% empty %}
+                                        <tr>
+                                            <td colspan="7" class="text-center">No nodes found.</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="mt-3 d-flex gap-2">
+                            <button type="submit" name="action" value="delete_selected_nodes"
+                                    class="btn btn-danger" id="deleteButton" disabled>
+                                <i class="bi bi-trash"></i> Delete Selected Nodes
+                            </button>
+                            <button type="submit" name="action" value="remove_specific_nodes"
+                                    class="btn btn-warning">
+                                <i class="bi bi-exclamation-triangle"></i> Remove Problematic Nodes
+                            </button>
+                            <button type="submit" name="action" value="delete_all_nodes"
+                                    class="btn btn-danger ms-auto" id="deleteAllButton"
+                                    onclick="return confirm('WARNING: Are you absolutely sure you want to delete ALL nodes? This cannot be undone!');">
+                                <i class="bi bi-exclamation-triangle-fill"></i> Delete ALL Nodes
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h3>Blacklisted IPs</h3>
+                </div>
+                <div class="card-body">
+                    <p>These IP addresses are blacklisted and will not be used:</p>
+                    <ul>
+                        {% for ip in blacklisted_ips %}
+                            <li>{{ ip }}</li>
+                        {% empty %}
+                            <li>No IPs are currently blacklisted.</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const selectAllCheckbox = document.getElementById('selectAll');
+    const nodeCheckboxes = document.querySelectorAll('.node-checkbox:not([disabled])');
+    const deleteButton = document.getElementById('deleteButton');
+
+    // Toggle "Select All" checkbox
+    selectAllCheckbox.addEventListener('change', function() {
+        nodeCheckboxes.forEach(checkbox => {
+            checkbox.checked = selectAllCheckbox.checked;
+        });
+        updateDeleteButton();
+    });
+
+    // Listen for individual checkbox changes
+    nodeCheckboxes.forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            updateSelectAllStatus();
+            updateDeleteButton();
+        });
+    });
+
+    // Update "Select All" checkbox status
+    function updateSelectAllStatus() {
+        const allChecked = Array.from(nodeCheckboxes).every(cb => cb.checked);
+        const anyChecked = Array.from(nodeCheckboxes).some(cb => cb.checked);
+
+        selectAllCheckbox.checked = allChecked;
+        // Optional: set indeterminate state if some but not all are checked
+        selectAllCheckbox.indeterminate = anyChecked && !allChecked;
+    }
+
+    // Enable/disable delete button based on selection
+    function updateDeleteButton() {
+        const anyChecked = Array.from(nodeCheckboxes).some(cb => cb.checked);
+        deleteButton.disabled = !anyChecked;
+    }
+
+    // Confirm before deleting nodes
+    const form = document.querySelector('form');
+    form.addEventListener('submit', function(event) {
+        if (event.submitter.value === 'delete_selected_nodes') {
+            const selectedCount = document.querySelectorAll('.node-checkbox:checked').length;
+            if (!confirm(`Are you sure you want to delete ${selectedCount} selected node(s)?`)) {
+                event.preventDefault();
+            }
+        }
+    });
+});
+</script>
+{% endblock %}

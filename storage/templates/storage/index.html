@@ -1,0 +1,21 @@
+{% extends 'storage/base.html' %}
+
+{% block content %}
+    <div class="text-center">
+        <h1>Welcome to IPFS File Storage</h1>
+        <p>Upload and manage your files securely with IPFS.</p>
+
+        {% if user.is_authenticated %}
+            <a href="{% url 'file_list' %}" class="btn btn-primary">My Files</a>
+
+            <!-- Show Admin Dashboard button if the user is a superuser -->
+            {% if user.is_superuser %}
+                <a href="{% url 'admin_dashboard' %}" class="btn btn-warning">Admin Dashboard</a>
+            {% endif %}
+
+        {% else %}
+            <a href="{% url 'login' %}" class="btn btn-success">Login</a>
+            <a href="{% url 'register' %}" class="btn btn-secondary">Register</a>
+        {% endif %}
+    </div>
+{% endblock %}
