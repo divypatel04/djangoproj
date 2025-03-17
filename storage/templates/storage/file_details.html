@@ -21,24 +21,26 @@
             <div class="row mt-4">
                 <div class="col-md-6">
                     <h4>File Information</h4>
-                    <table class="table table-bordered">
-                        <tr>
-                            <th>Size</th>
-                            <td>{{ file.size }} bytes</td>
-                        </tr>
-                        <tr>
-                            <th>Uploaded</th>
-                            <td>{{ file.uploaded_at|date:"Y-m-d H:i:s T" }}</td>
-                        </tr>
-                        <tr>
-                            <th>Checksum (SHA-256)</th>
-                            <td><code>{{ file.checksum }}</code></td>
-                        </tr>
-                        <tr>
-                            <th>IPFS Hash</th>
-                            <td><code>{{ file.ipfs_hash }}</code></td>
-                        </tr>
-                    </table>
+                    <div class="table-responsive">
+                        <table class="table table-bordered">
+                            <tr>
+                                <th style="width: 35%">Size</th>
+                                <td>{{ file.size }} bytes</td>
+                            </tr>
+                            <tr>
+                                <th>Uploaded</th>
+                                <td>{{ file.uploaded_at|date:"Y-m-d H:i:s T" }}</td>
+                            </tr>
+                            <tr>
+                                <th>Checksum (SHA-256)</th>
+                                <td class="text-break"><code>{{ file.checksum }}</code></td>
+                            </tr>
+                            <tr>
+                                <th>IPFS Hash</th>
+                                <td class="text-break"><code>{{ file.ipfs_hash }}</code></td>
+                            </tr>
+                        </table>
+                    </div>
                 </div>
                 <div class="col-md-6">
                     <h4>Storage Information</h4>
